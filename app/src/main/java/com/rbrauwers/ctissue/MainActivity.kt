@@ -13,21 +13,20 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.appmattus.certificatetransparency.installCertificateTransparencyProvider
+import com.appmattus.certificatetransparency.certificateTransparencyInterceptor
 import com.rbrauwers.ctissue.ui.theme.CTIssueTheme
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -50,14 +49,55 @@ fun CTSample() {
         mutableStateOf(UIState())
     }
 
+    val appHttpClient =  OkHttpClient.Builder().apply {
+        addNetworkInterceptor(certificateTransparencyInterceptor())
+    }.build()
+
+    val sdkHttpClient =  OkHttpClient.Builder().apply {
+        addNetworkInterceptor(certificateTransparencyInterceptor())
+    }.build()
+
+    val appRetrofit = Retrofit.Builder()
+        .baseUrl("https://api.publicapis.org/")
+        .addConverterFactory(GsonConverterFactory.create())
+        .client(appHttpClient)
+        .build()
+
+    val sdkRetrofit = Retrofit.Builder()
+        .baseUrl("https://api.publicapis.org/")
+        .addConverterFactory(GsonConverterFactory.create())
+        .client(sdkHttpClient)
+        .build()
+
+    val appApi = appRetrofit.create(PublicApi::class.java)
+    val sdkApi = sdkRetrofit.create(PublicApi::class.java)
+
     LaunchedEffect(true) {
-        installAppCT(uiState)
+        runCatching {
+            appApi.getEntries()
+        }.onSuccess {
+            uiState.value = uiState.value.copy(
+                appApiState = "App API response: ${it.toString().take(40)}"
+            )
+        }.onFailure {
+            uiState.value = uiState.value.copy(
+                appApiState = "App API error: $it"
+            )
+        }
+
         delay(2000)
 
-        installSDKCT(uiState)
-        delay(2000)
-
-        callApi(uiState)
+        runCatching {
+            sdkApi.getCategories()
+        }.onSuccess {
+            uiState.value = uiState.value.copy(
+                sdkApiState = "SDK API response: ${it.toString().take(40)}"
+            )
+        }.onFailure {
+            uiState.value = uiState.value.copy(
+                sdkApiState = "SDK API error: $it"
+            )
+        }
     }
 
     Column(modifier = Modifier.padding(24.dp)) {
@@ -71,70 +111,14 @@ fun CTSample() {
             Spacer(modifier = Modifier.height(20.dp))
         }
 
-        uiState.value.apiState?.let { apiState ->
-            Text(text = apiState)
+        uiState.value.appApiState?.let { state ->
+            Text(text = state)
             Spacer(modifier = Modifier.height(20.dp))
         }
-    }
-}
 
-private suspend fun installAppCT(uiState: MutableState<UIState>) {
-    uiState.value = uiState.value.copy(
-        appCTState = "App CT: installing"
-    )
-
-    delay(2000)
-
-    installCertificateTransparencyProvider {  }
-
-    uiState.value = uiState.value.copy(
-        appCTState = "App CT: installed"
-    )
-}
-
-private suspend fun installSDKCT(uiState: MutableState<UIState>) {
-    uiState.value = uiState.value.copy(
-        sdkCTState = "SDK CT: installing"
-    )
-
-    delay(2000)
-
-    installCertificateTransparencyProvider {  }
-
-    uiState.value = uiState.value.copy(
-        sdkCTState = "SDK CT: installed"
-    )
-}
-
-private suspend fun callApi(uiState: MutableState<UIState>) {
-    uiState.value = uiState.value.copy(
-        apiState = "Will crash on http request"
-    )
-
-    delay(2000)
-
-    val retrofit = Retrofit.Builder()
-        .baseUrl("https://api.publicapis.org/")
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
-
-    val api = retrofit.create(PublicApi::class.java)
-
-    runCatching {
-        withContext(Dispatchers.IO) {
-            api.getEntries()
-        }
-    }.onSuccess {
-        withContext(Dispatchers.Default) {
-            uiState.value = uiState.value.copy(
-                apiState = "Api response: $it"
-            )
-        }
-    }.onFailure {
-        withContext(Dispatchers.Default) {
-            uiState.value = uiState.value.copy(
-                apiState = "Api error: $it"
-            )
+        uiState.value.sdkApiState?.let { state ->
+            Text(text = state)
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }
@@ -142,10 +126,14 @@ private suspend fun callApi(uiState: MutableState<UIState>) {
 private data class UIState(
     val appCTState: String? = null,
     val sdkCTState: String? = null,
-    val apiState: String? = null
+    val appApiState: String? = null,
+    val sdkApiState: String? = null
 )
 
 private interface PublicApi {
     @GET("entries")
     suspend fun getEntries(): Any
+
+    @GET("categories")
+    suspend fun getCategories(): Any
 }
